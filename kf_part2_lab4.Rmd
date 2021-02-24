@@ -1,0 +1,179 @@
+---
+title: "Intro to Time Series Wrangling & Viz"
+author: "Kelsie Fronheiser"
+date: "2/17/2021"
+output: 
+  html_document:
+    theme: readable
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, error = FALSE, message = FALSE)
+
+library(tidyverse)
+library(here)
+library(lubridate)
+library(tsibble)
+library (feasts)
+library(slider)
+library(prettydoc)
+```
+
+This data was collected at the Arctic LTER which contains daily obs of air temp
+Read in the data:
+```{r}
+toolik <- read_csv(here("data", "toolikweather.csv"))
+```
+Convert this into a tsibble
+```{r}
+#use mdy for month/date/year which is what the data is already in for the column "date"
+
+toolik_ts <- toolik %>% 
+  mutate(date = lubridate::mdy(date)) %>% 
+  as_tsibble(key = NULL, index = date)
+```
+
+```{r}
+ggplot(data = toolik_ts, aes(x = date, y = mean_airtemp)) +
+  geom_line()
+```
+
+Analysis:
+- Seasonality is dominant feature
+- No trend
+- No major cyclical patterns
+
+
+
+Using "index_by()" function to aggregate time series formation by intervals we specify; this is the time series equivalent of "group_by" in dplyr
+```{r}
+
+#second row is saying that we want groupings of the entire time series data set (.) by year & month (~yearmonth)
+#na.rm = TRUE removes na values
+
+toolik_month <- toolik_ts %>% 
+  index_by(yr_mo = ~yearmonth(.)) %>% 
+  summarize(monthly_mean_temp = mean(mean_airtemp, na.rm = TRUE))
+
+
+ggplot(data = toolik_month, aes(x = yr_mo, y = monthly_mean_temp)) +
+  geom_line() +
+  facet_wrap(~month(yr_mo, label = TRUE))
+
+#this is now one observation per month (averages of daily temps per month)
+```
+
+###Aggregate by week
+```{r}
+toolik_week <- toolik_ts %>% 
+  index_by(weekly = ~yearweek(.)) %>% 
+  summarize(weekly_airtemp = mean(mean_airtemp, na.rm = TRUE),
+            min_airtemp = min(mean_airtemp))
+
+head(toolik_week)
+```
+
+
+##Filtering Time Series Data
+Time series equivalent to filter is 'filter_index()'- use to speify ranges of time series to keep or exclude
+
+```{r}
+toolik_ts %>% 
+  filter_index("2000-06" ~ "2001-10")
+```
+
+```{r}
+toolik_ts %>% 
+  filter_index("2006-04-10" ~ "2006-05-15")
+```
+
+## Season Plots
+```{r}
+#second line is pulling the year from the date column and keeping obs greater than 2014
+toolik_ts %>% 
+  filter(year(date) > 2014) %>% 
+  gg_season(y = mean_airtemp) +
+  theme_light()
+
+toolik_month %>% 
+  gg_season(y = monthly_mean_temp) +
+  theme_light()
+```
+
+This helps to capture what is changing (or staying the same) with seasonality across years
+
+## Seasonal subseries plot
+```{r}
+toolik_month %>% 
+  gg_subseries(monthly_mean_temp)
+```
+
+The blue lines are the means values
+
+
+## Find Moving Average
+with sliderpackage in R
+
+```{r}
+# this creates windows of sections of moving averages 
+set.seed(2021)
+test <- rnorm(n = 100, mean = 40, sd = 10)
+
+
+slide(test, ~.x, .before = 2, .after = 2)
+```
+
+This will calculate moving average of window size 15
+```{r}
+roll_toolik_15 <- toolik_ts %>% 
+  mutate(ma_15d = as.numeric(slide(toolik_ts$mean_airtemp,
+                                   mean,
+                                   .before = 7,
+                                   .after = 7)))
+
+ggplot() +
+  geom_line(data = toolik_ts, aes(x = date, y = mean_airtemp),
+            size = 0.2,
+            color = "gray") +
+  geom_line(data = roll_toolik_15, aes(x = date, y = ma_15d)) +
+  theme_minimal()
+```
+
+## Create the ACF
+
+auto correlation function- visual representation of how obs are correlated with prior obs on the same variable over specified lags of time
+
+```{r}
+toolik_ts %>%
+  ACF(mean_airtemp) %>% 
+  autoplot()
+
+#This shows the days are highly correlated
+
+
+toolik_month %>% 
+  ACF(monthly_mean_temp) %>% 
+  autoplot()
+
+# this shows that obs 12 months apart are strongly correlated, 6 or 8 months apart has negative correlation > strong seasonality
+#not a lot of dampening happening in terms of auto correlation function 
+```
+
+
+## Decomposition by STL
+```{r}
+
+toolik_dec <- toolik_month %>% 
+  model(STL(monthly_mean_temp ~ season(window = Inf)))
+
+components(toolik_dec) %>% 
+  autoplot()
+```
+
+The y scale are free - don't be thrown off by shape of panels without considering scale of changes compared to data
+You can see here that seasonilty accounts for most residuals , this supports seasonality as most dominant feature 
+
+
+
+
